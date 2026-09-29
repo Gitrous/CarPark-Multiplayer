@@ -118,6 +118,15 @@
   </div>
   <aside>
     <section>
+      <h3>Niveles pasados</h3>
+      <div class="muted">Cada vez que pases un nivel, avisa aquí: +1 punto.</div>
+      <div class="row">
+        <button id="levelUp" class="good" style="flex:1">⭐ ¡Pasé un nivel!</button>
+        <button id="levelUndo" title="Quitar el último nivel si te equivocaste">Deshacer</button>
+      </div>
+    </section>
+
+    <section>
       <h3>Carrera</h3>
       <div id="raceInfo" class="muted">Esperando a que el anfitrión dé la salida.</div>
       <div id="timer">0:00.0</div>
@@ -135,7 +144,7 @@
     <section>
       <h3>Jugadores</h3>
       <table>
-        <thead><tr><th>Nombre</th><th class="num">Tiempo</th><th class="num">Puntos</th></tr></thead>
+        <thead><tr><th>Nombre</th><th class="num">Niveles</th><th class="num">Tiempo</th><th class="num">Puntos</th></tr></thead>
         <tbody id="players"></tbody>
       </table>
     </section>
@@ -173,6 +182,7 @@
   const DEFAULT_GAME_URL = 'https://inlogic.cdn.msnfun.com/9n96gnlxsktg/v6/index.html';
   const ID_PREFIX = 'carpark-mp-';
   const POINTS = [5, 3, 2, 1]; // puntos por posición de llegada; el resto recibe 1
+  const LEVEL_POINTS = 1;       // puntos por cada nivel pasado
 
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
@@ -248,7 +258,7 @@
       const status = p.status === 'done' ? fmt(p.time)
         : p.status === 'gave-up' ? 'se rindió'
         : p.status === 'playing' ? 'jugando…' : '—';
-      for (const [txt, cls] of [[p.name, ''], [status, 'num'], [p.score, 'num']]) {
+      for (const [txt, cls] of [[p.name, ''], [p.levels || 0, 'num'], [status, 'num'], [p.score, 'num']]) {
         const td = document.createElement('td');
         td.textContent = txt;
         if (cls) td.className = cls;
@@ -282,7 +292,7 @@
     const p = players.find((x) => x.id === fromId);
     switch (msg.t) {
       case 'hello':
-        if (!p) players.push({ id: fromId, name: String(msg.name).slice(0, 16), score: 0, time: null, status: 'idle' });
+        if (!p) players.push({ id: fromId, name: String(msg.name).slice(0, 16), score: 0, levels: 0, time: null, status: 'idle' });
         hostSyncRoster();
         hostRelay({ t: 'chat-sys', text: `${String(msg.name).slice(0, 16)} se unió a la sala.` });
         if (race.running) {
@@ -298,6 +308,20 @@
         race.finishOrder++;
         hostRelay({ t: 'chat-sys', text: `🏁 ${p.name} terminó en ${fmt(p.time)} (puesto ${race.finishOrder}).` });
         hostCheckRaceOver();
+        hostSyncRoster();
+        break;
+      case 'level':
+        if (!p) return;
+        p.levels = (p.levels || 0) + 1;
+        p.score += LEVEL_POINTS;
+        hostRelay({ t: 'chat-sys', text: `⭐ ${p.name} pasó un nivel (lleva ${p.levels}).` });
+        hostSyncRoster();
+        break;
+      case 'level-undo':
+        if (!p || !p.levels) return;
+        p.levels--;
+        p.score = Math.max(0, p.score - LEVEL_POINTS);
+        hostRelay({ t: 'chat-sys', text: `${p.name} quitó un nivel (lleva ${p.levels}).` });
         hostSyncRoster();
         break;
       case 'giveup':
@@ -408,6 +432,14 @@
     $('giveUp').disabled = true;
     send({ t: 'finish', ms });
   };
+  // Evita contar dos veces por un doble clic sin querer
+  let lastLevelClick = 0;
+  $('levelUp').onclick = () => {
+    if (Date.now() - lastLevelClick < 1500) return;
+    lastLevelClick = Date.now();
+    send({ t: 'level' });
+  };
+  $('levelUndo').onclick = () => send({ t: 'level-undo' });
   $('giveUp').onclick = () => {
     if (myFinished) return;
     myFinished = true;
@@ -419,7 +451,7 @@
   $('start').onclick = () => { if (isHost && players.length) hostStartRace(); };
   $('resetScores').onclick = () => {
     if (!isHost) return;
-    for (const p of players) { p.score = 0; p.time = null; if (p.status !== 'playing') p.status = 'idle'; }
+    for (const p of players) { p.score = 0; p.levels = 0; p.time = null; if (p.status !== 'playing') p.status = 'idle'; }
     hostSyncRoster();
     hostRelay({ t: 'reset' });
   };
@@ -539,7 +571,7 @@
     peer.on('open', (id) => {
       myId = id;
       isHost = true;
-      players = [{ id, name: myName(), score: 0, time: null, status: 'idle' }];
+      players = [{ id, name: myName(), score: 0, levels: 0, time: null, status: 'idle' }];
       enterApp(code);
       renderPlayers();
       setStatus('Anfitrión · comparte el código con tus amigos');
