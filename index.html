@@ -617,12 +617,25 @@
     const code = $('joinCode').value.trim().toUpperCase();
     if (!/^[A-Z]{5}$/.test(code)) { alert('El código tiene 5 letras.'); return; }
     lockLobby(true);
-    setStatus('Conectando…');
+    setStatus('Conectando al servicio de salas…');
     let tries = 0;
+    let joined = false;
+    // Si en 30 s no hemos entrado, no esperamos para siempre: averiguamos por qué.
+    const watchdog = setTimeout(async () => {
+      if (joined || !peer) return;
+      const reachedServer = !!myId;
+      setStatus('Revisando tu conexión…');
+      const reason = reachedServer ? await diagnoseNetwork() : 'no-server';
+      abortJoin();
+      alert(JOIN_HELP[reason]);
+    }, 30000);
     const connectToHost = () => {
       tries++;
+      setStatus(tries === 1 ? 'Conectando con el anfitrión…' : 'Buscando la sala… (segundo intento)');
       hostConn = peer.connect(ID_PREFIX + code, { reliable: true });
       hostConn.on('open', () => {
+        joined = true;
+        clearTimeout(watchdog);
         enterApp(code);
         setStatus('Conectado');
         hostConn.send({ t: 'hello', name: myName() });
@@ -630,6 +643,7 @@
       });
       hostConn.on('data', handleClientMessage);
       hostConn.on('close', () => {
+        if (!joined) return;
         setStatus('El anfitrión cerró la sala');
         logChat('Se perdió la conexión con el anfitrión.');
         stopTimer();
@@ -650,19 +664,67 @@
         if (hostConn && hostConn.open) return;
         // El anfitrión puede estar reconectándose al servicio de salas: reintentar un poco.
         if (tries < 2) {
-          setStatus(`Buscando la sala… (segundo intento)`);
           setTimeout(connectToHost, 2500);
           return;
         }
+        clearTimeout(watchdog);
+        abortJoin();
         alert('No se encontró la sala ' + code + '. Revisa el código y pide al anfitrión que mantenga abierta la pestaña de la sala.');
-        peer.destroy();
-        peer = null;
-        lockLobby(false);
-        setStatus('Sin conectar');
+        return;
+      }
+      if (!joined && ['network', 'server-error', 'socket-error', 'socket-closed', 'browser-incompatible', 'ssl-unavailable'].includes(err.type)) {
+        clearTimeout(watchdog);
+        abortJoin();
+        alert(JOIN_HELP[err.type === 'browser-incompatible' ? 'webrtc-off' : 'no-server']);
         return;
       }
       networkError(err);
     });
+  }
+
+  // Vuelve a la pantalla inicial para poder intentarlo otra vez desde cero.
+  function abortJoin() {
+    if (peer) peer.destroy();
+    peer = null;
+    myId = null;
+    hostConn = null;
+    lockLobby(false);
+    setStatus('Sin conectar');
+  }
+
+  const JOIN_HELP = {
+    'no-server': 'No se pudo conectar al servicio de salas. Puede que tu red (colegio, trabajo, VPN) lo bloquee. Prueba con los datos del móvil o con otra red.',
+    'webrtc-off': 'Tu navegador tiene bloqueadas las conexiones entre jugadores (WebRTC). Suele ser por una extensión (bloqueador de anuncios, "WebRTC leak"), una VPN o el administrador. Prueba en Chrome o Edge sin extensiones, o desde otro dispositivo.',
+    'udp-blocked': 'Tu red no deja pasar las conexiones de juego (UDP). Pasa mucho en wifis de colegio o trabajo. Prueba con los datos del móvil (compártelos al PC) o con otra red.',
+    'nat': 'La sala existe, pero vuestras dos redes no consiguen conectarse entre sí. Prueba: 1) que cree la sala otro jugador y os unáis a él, o 2) usar los datos del móvil.',
+  };
+
+  // Mira qué tipos de conexión consigue este navegador para dar un consejo concreto.
+  async function diagnoseNetwork() {
+    if (typeof RTCPeerConnection === 'undefined') return 'webrtc-off';
+    const types = new Set();
+    let pc;
+    try {
+      const iceServers = (peer && peer.options && peer.options.config && peer.options.config.iceServers) || [];
+      pc = new RTCPeerConnection({ iceServers });
+      pc.createDataChannel('test');
+      pc.onicecandidate = (e) => {
+        const m = e.candidate && / typ (\w+)/.exec(e.candidate.candidate);
+        if (m) types.add(m[1]);
+      };
+      await pc.setLocalDescription(await pc.createOffer());
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, 6000);
+        pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); resolve(); } };
+      });
+    } catch {
+      return 'webrtc-off';
+    } finally {
+      if (pc) pc.close();
+    }
+    if (types.size === 0) return 'webrtc-off';
+    if (!types.has('srflx') && !types.has('relay')) return 'udp-blocked';
+    return 'nat';
   }
 
   // Si la pestaña pasa a segundo plano o falla la red, el servicio de salas nos
