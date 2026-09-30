@@ -569,6 +569,7 @@
     setStatus('Creando sala…');
     peer = new Peer(ID_PREFIX + code, peerOptions);
     peer.on('open', (id) => {
+      if (myId) { setStatus('Anfitrión · reconectado'); return; } // tras reconectar
       myId = id;
       isHost = true;
       players = [{ id, name: myName(), score: 0, levels: 0, time: null, status: 'idle' }];
@@ -588,6 +589,7 @@
       for (const [id, t] of lastSeen) if (Date.now() - t > 10000) hostDropGuest(id);
     }, 3000);
     setupMediaAnswer();
+    keepRegistered();
     peer.on('error', (err) => {
       if (err.type === 'unavailable-id' && attempt < 5 && !myId) {
         peer.destroy();
@@ -616,9 +618,9 @@
     if (!/^[A-Z]{5}$/.test(code)) { alert('El código tiene 5 letras.'); return; }
     lockLobby(true);
     setStatus('Conectando…');
-    peer = new Peer(undefined, peerOptions);
-    peer.on('open', (id) => {
-      myId = id;
+    let tries = 0;
+    const connectToHost = () => {
+      tries++;
       hostConn = peer.connect(ID_PREFIX + code, { reliable: true });
       hostConn.on('open', () => {
         enterApp(code);
@@ -633,11 +635,26 @@
         stopTimer();
         setRaceButtons(false);
       });
+    };
+    peer = new Peer(undefined, peerOptions);
+    peer.on('open', (id) => {
+      if (myId) { if (hostConn && hostConn.open) setStatus('Conectado'); return; } // tras reconectar
+      myId = id;
+      connectToHost();
     });
     setupMediaAnswer();
+    keepRegistered();
     peer.on('error', (err) => {
       if (err.type === 'peer-unavailable') {
-        alert('No existe ninguna sala con ese código (o el anfitrión la cerró).');
+        // Solo importa mientras entramos; después puede venir de llamar a alguien que ya se fue.
+        if (hostConn && hostConn.open) return;
+        // El anfitrión puede estar reconectándose al servicio de salas: reintentar un poco.
+        if (tries < 2) {
+          setStatus(`Buscando la sala… (segundo intento)`);
+          setTimeout(connectToHost, 2500);
+          return;
+        }
+        alert('No se encontró la sala ' + code + '. Revisa el código y pide al anfitrión que mantenga abierta la pestaña de la sala.');
         peer.destroy();
         peer = null;
         lockLobby(false);
@@ -647,6 +664,21 @@
       networkError(err);
     });
   }
+
+  // Si la pestaña pasa a segundo plano o falla la red, el servicio de salas nos
+  // puede dar de baja y nadie más podría unirse: volvemos a registrarnos solos.
+  function keepRegistered() {
+    const p = peer;
+    p.on('disconnected', () => {
+      if (p !== peer || p.destroyed) return;
+      setStatus('Reconectando al servicio de salas…');
+      setTimeout(() => { if (p === peer && p.disconnected && !p.destroyed) p.reconnect(); }, 1000);
+    });
+  }
+  setInterval(() => { if (peer && myId && peer.disconnected && !peer.destroyed) peer.reconnect(); }, 5000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && peer && myId && peer.disconnected && !peer.destroyed) peer.reconnect();
+  });
 
   function networkError(err) {
     console.error(err);
