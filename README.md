@@ -32,5 +32,9 @@ Cada jugador necesita su copia (o pásale el archivo por chat).
   y juega allí; la sala, el cronómetro y el chat siguen funcionando.
 - **Juegas con tu copia local (`jugar_car_park.bat`):** en *Opciones avanzadas* pon
   `http://localhost:8000/index.html` como dirección del juego.
+- **"Vuestras dos redes no consiguen conectarse entre sí"** (pasa en wifis de institutos,
+  hoteles, etc., que aíslan a los dispositivos): crea una cuenta gratuita de servidor TURN
+  (por ejemplo en metered.ca) y pega sus direcciones, usuario y contraseña en
+  *Opciones avanzadas* antes de crear la sala. Viajan dentro del enlace de invitación.
 - **"No se pudo conectar al servicio de salas":** algunas redes de colegio o trabajo
   bloquean WebRTC/PeerJS. Prueba con otra red o con datos móviles.

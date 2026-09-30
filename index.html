@@ -21,7 +21,7 @@
   button:disabled { opacity: .45; cursor: default; }
   button.primary { background: var(--accent); color: #1a1a1a; border-color: var(--accent); font-weight: 600; }
   button.good { background: var(--good); color: #102015; border-color: var(--good); font-weight: 600; }
-  input, select {
+  input, select, textarea {
     background: #0f1115; color: var(--text); border: 1px solid var(--border);
     border-radius: 8px; padding: 8px 10px; min-width: 0;
   }
@@ -107,6 +107,14 @@
     <summary>Opciones avanzadas</summary>
     <label class="muted">Dirección del juego (cámbiala si lo juegas desde tu PC, p. ej. http://localhost:8000/index.html)</label>
     <input id="gameUrl">
+    <label class="muted">Servidor intermediario (TURN), por si no conseguís conectaros (p. ej. en la wifi del instituto).
+      Pega las direcciones que te dé tu proveedor (una por línea o separadas por comas).</label>
+    <textarea id="turnUrls" rows="3" placeholder="turn:ejemplo.relay.metered.ca:80&#10;turns:ejemplo.relay.metered.ca:443?transport=tcp"></textarea>
+    <div class="row">
+      <input id="turnUser" placeholder="Usuario (username)" autocomplete="off">
+      <input id="turnPass" placeholder="Contraseña (credential)" autocomplete="off">
+    </div>
+    <span class="muted">Se incluyen en el enlace de invitación, así tus amigos no tienen que ponerlos.</span>
   </details>
 </div>
 
@@ -203,6 +211,29 @@
 
   $('name').value = store.get('cpmp-name') || '';
   $('gameUrl').value = store.get('cpmp-game') || DEFAULT_GAME_URL;
+  // Datos del servidor TURN: primero los del enlace de invitación, si no los guardados.
+  $('turnUrls').value = params.get('turn') || store.get('cpmp-turn') || '';
+  $('turnUser').value = params.get('tu') || store.get('cpmp-turn-user') || '';
+  $('turnPass').value = params.get('tp') || store.get('cpmp-turn-pass') || '';
+  if ($('turnUrls').value) document.querySelector('details').open = true;
+
+  const turnUrls = () => $('turnUrls').value.split(/[\s,]+/).filter((u) => /^turns?:/.test(u));
+
+  // Añade el servidor TURN propio (si hay) a los que trae PeerJS por defecto.
+  function applyTurn() {
+    store.set('cpmp-turn', $('turnUrls').value.trim());
+    store.set('cpmp-turn-user', $('turnUser').value.trim());
+    store.set('cpmp-turn-pass', $('turnPass').value.trim());
+    const urls = turnUrls();
+    if (!urls.length) { delete peerOptions.config; return; }
+    peerOptions.config = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: urls, username: $('turnUser').value.trim(), credential: $('turnPass').value.trim() },
+        { urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username: 'peerjs', credential: 'peerjsp' },
+      ],
+    };
+  }
   if (params.get('sala')) $('joinCode').value = params.get('sala').toUpperCase();
 
   // ---------- Estado ----------
@@ -540,6 +571,11 @@
       const url = new URL(location.href);
       url.search = '';
       for (const k of ['peerhost', 'peerport', 'peerpath', 'peersecure']) if (params.get(k)) url.searchParams.set(k, params.get(k));
+      if (turnUrls().length) {
+        url.searchParams.set('turn', turnUrls().join(','));
+        url.searchParams.set('tu', $('turnUser').value.trim());
+        url.searchParams.set('tp', $('turnPass').value.trim());
+      }
       url.searchParams.set('sala', code);
       try { await navigator.clipboard.writeText(url.href); $('copyLink').textContent = '¡Copiado!'; }
       catch { prompt('Copia este enlace:', url.href); }
@@ -567,6 +603,7 @@
     lockLobby(true);
     const code = randomCode();
     setStatus('Creando sala…');
+    applyTurn();
     peer = new Peer(ID_PREFIX + code, peerOptions);
     peer.on('open', (id) => {
       if (myId) { setStatus('Anfitrión · reconectado'); return; } // tras reconectar
@@ -650,6 +687,7 @@
         setRaceButtons(false);
       });
     };
+    applyTurn();
     peer = new Peer(undefined, peerOptions);
     peer.on('open', (id) => {
       if (myId) { if (hostConn && hostConn.open) setStatus('Conectado'); return; } // tras reconectar
@@ -696,7 +734,7 @@
     'no-server': 'No se pudo conectar al servicio de salas. Puede que tu red (colegio, trabajo, VPN) lo bloquee. Prueba con los datos del móvil o con otra red.',
     'webrtc-off': 'Tu navegador tiene bloqueadas las conexiones entre jugadores (WebRTC). Suele ser por una extensión (bloqueador de anuncios, "WebRTC leak"), una VPN o el administrador. Prueba en Chrome o Edge sin extensiones, o desde otro dispositivo.',
     'udp-blocked': 'Tu red no deja pasar las conexiones de juego (UDP). Pasa mucho en wifis de colegio o trabajo. Prueba con los datos del móvil (compártelos al PC) o con otra red.',
-    'nat': 'La sala existe, pero vuestras dos redes no consiguen conectarse entre sí. Prueba: 1) que cree la sala otro jugador y os unáis a él, o 2) usar los datos del móvil.',
+    'nat': 'La sala existe, pero vuestras dos redes no consiguen conectarse entre sí. Prueba: 1) que cree la sala otro jugador y os unáis a él, 2) usar los datos del móvil, o 3) configurar un servidor intermediario (TURN) en "Opciones avanzadas".',
   };
 
   // Mira qué tipos de conexión consigue este navegador para dar un consejo concreto.
