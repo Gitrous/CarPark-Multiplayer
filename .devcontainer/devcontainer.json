@@ -1,0 +1,9 @@
+{
+  "name": "Car Park Multijugador",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": { "label": "Car Park Multijugador", "onAutoForward": "notify" }
+  },
+  "postAttachCommand": "node server.js"
+}

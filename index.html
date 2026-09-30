@@ -150,6 +150,21 @@
     <p class="warn">No publiques ese enlace: lleva tu usuario y contraseña del servidor y cualquiera
       podría gastar tu cuota gratuita. Pásalo solo a tus amigos.</p>
 
+    <h3>🖥️ Alternativa: tu propio servidor en GitHub Codespaces</h3>
+    <p>Todo va por la web normal (HTTPS), así que funciona aunque la wifi no deje conectar a los
+      jugadores entre sí. No se puede compartir pantalla en este modo.</p>
+    <ol>
+      <li>En GitHub, abre el repositorio → botón verde <b>Code</b> → pestaña <b>Codespaces</b> →
+        <b>Create codespace</b>.</li>
+      <li>Espera a que cargue: el servidor arranca solo en una terminal («funcionando en el puerto 8080»).</li>
+      <li>Abre la pestaña <b>PUERTOS</b> (Ports) → clic derecho en el <b>8080</b> →
+        <b>Visibilidad del puerto</b> → <b>Público</b>.</li>
+      <li>Abre la dirección del puerto 8080 (termina en <code>app.github.dev</code>). Arriba pondrá
+        <b>«Modo servidor»</b>. Crea la sala y pasa el enlace de invitación.</li>
+    </ol>
+    <p class="warn">El Codespace tiene que seguir abierto mientras jugáis y se apaga tras un rato sin tocarlo
+      (30 min por defecto; puedes subirlo en GitHub → Settings → Codespaces). Las horas gratis al mes son limitadas.</p>
+
     <h3>🐢 Si el juego va lento</h3>
     <p>Compartir pantalla consume bastante. Que comparta solo uno, o nadie.</p>
 
@@ -629,6 +644,160 @@
   $('share').onclick = toggleShare;
   $('openGame').onclick = () => window.open($('gameUrl').value || DEFAULT_GAME_URL, '_blank');
 
+  // ---------- Modo servidor (server.js, p. ej. en un Codespace) ----------
+  // Si la página la sirve server.js, los mensajes van por HTTPS a través del servidor
+  // en vez de por WebRTC: funciona aunque la red no deje conectar a los jugadores entre sí.
+  // Imita la parte de PeerJS que usa esta página, así el resto del código no cambia.
+  let RELAY = false;
+  const RELAY_BASE = new URL('.', location.href).href;
+  const relayReady = (async () => {
+    if (location.protocol === 'file:') return;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 3000);
+    try {
+      const r = await fetch(RELAY_BASE + 'relay/ping', { signal: ctrl.signal, cache: 'no-store' });
+      RELAY = r.ok && (await r.json()).relay === true;
+    } catch {}
+    clearTimeout(t);
+    if (RELAY) {
+      setStatus('Modo servidor');
+      $('share').disabled = true;
+      $('share').title = 'En modo servidor no se puede compartir pantalla';
+      $('streams').innerHTML = '<span class="muted">En modo servidor no se puede compartir pantalla.</span>';
+    }
+  })();
+
+  class Emitter {
+    on(ev, fn) { ((this._h ||= {})[ev] ||= []).push(fn); return this; }
+    emit(ev, ...args) { for (const fn of (this._h && this._h[ev]) || []) fn(...args); }
+  }
+
+  class RelayConn extends Emitter {
+    constructor(owner, remoteId) { super(); this._owner = owner; this.peer = remoteId; this.open = false; this._closed = false; }
+    send(data) { if (this.open) this._owner._post(this.peer, 'data', data); }
+    close() {
+      if (this._closed) return;
+      this._closed = true;
+      const wasOpen = this.open;
+      this.open = false;
+      this._owner._conns.delete(this.peer);
+      this._owner._post(this.peer, 'close');
+      if (wasOpen) this.emit('close');
+    }
+    _remoteClose() {
+      if (this._closed) return;
+      this._closed = true;
+      this.open = false;
+      this._owner._conns.delete(this.peer);
+      this.emit('close');
+    }
+  }
+
+  class RelayPeer extends Emitter {
+    constructor(id) {
+      super();
+      this._wantId = id || 'g-' + Math.random().toString(36).slice(2, 12);
+      this.id = null;
+      this._token = '';
+      this.disconnected = true;
+      this.destroyed = false;
+      this._conns = new Map();
+      this._chain = Promise.resolve(); // envía los mensajes en orden
+      this._connect();
+    }
+    _connect() {
+      const q = new URLSearchParams({ id: this._wantId });
+      if (this._token) q.set('token', this._token);
+      const es = this._es = new EventSource(RELAY_BASE + 'relay/events?' + q);
+      es.onmessage = (e) => { if (es === this._es) this._onMessage(JSON.parse(e.data)); };
+      es.onerror = () => {
+        if (es !== this._es) return;
+        es.close();
+        this._es = null;
+        this.disconnected = true;
+        if (this.destroyed) return;
+        if (!this.id) this.emit('error', { type: 'network' });
+        else this.emit('disconnected');
+      };
+    }
+    _onMessage(m) {
+      const c = this._conns.get(m.from);
+      switch (m.type) {
+        case 'open':
+          this.id = m.id;
+          this._token = m.token;
+          this.disconnected = false;
+          this.emit('open', m.id);
+          break;
+        case 'error':
+          if (this._es) this._es.close();
+          this._es = null;
+          this.emit('error', { type: m.errType });
+          break;
+        case 'connect': {
+          if (c) c._remoteClose();
+          const conn = new RelayConn(this, m.from);
+          this._conns.set(m.from, conn);
+          this.emit('connection', conn);
+          this._post(m.from, 'accept');
+          conn.open = true;
+          setTimeout(() => conn.emit('open'));
+          break;
+        }
+        case 'accept':
+          if (c && !c.open && !c._closed) { c.open = true; c.emit('open'); }
+          break;
+        case 'data':
+          if (c && c.open) c.emit('data', m.data);
+          break;
+        case 'close':
+          if (c) c._remoteClose();
+          break;
+      }
+    }
+    _post(to, kind, data) {
+      const body = () => JSON.stringify({ from: this.id, token: this._token, to, kind, data });
+      const p = this._chain.then(() =>
+        fetch(RELAY_BASE + 'relay/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body() })
+          .then((r) => r.json()).catch(() => null));
+      this._chain = p;
+      return p;
+    }
+    connect(id) {
+      const conn = new RelayConn(this, id);
+      this._conns.set(id, conn);
+      this._post(id, 'connect').then((r) => {
+        if (r && r.ok === false && r.reason === 'unavailable') {
+          conn._closed = true;
+          if (this._conns.get(id) === conn) this._conns.delete(id);
+          this.emit('error', { type: 'peer-unavailable' });
+        }
+      });
+      return conn;
+    }
+    call() { return null; } // sin vídeo en modo servidor
+    reconnect() { if (!this.destroyed && !this._es) this._connect(); }
+    destroy() {
+      if (this.destroyed) return;
+      this.destroyed = true;
+      for (const c of [...this._conns.values()]) c.close();
+      if (this._es) this._es.close();
+      this._es = null;
+      this.disconnected = true;
+      if (this.id) {
+        const payload = JSON.stringify({ id: this.id, token: this._token });
+        if (navigator.sendBeacon) navigator.sendBeacon(RELAY_BASE + 'relay/leave', new Blob([payload], { type: 'application/json' }));
+        else fetch(RELAY_BASE + 'relay/leave', { method: 'POST', body: payload, keepalive: true }).catch(() => {});
+      }
+    }
+  }
+
+  function makePeer(id) {
+    if (RELAY) return new RelayPeer(id);
+    if (typeof Peer === 'undefined') { alert('No se pudo cargar PeerJS.'); throw new Error('PeerJS missing'); }
+    return new Peer(id, peerOptions);
+  }
+
   // ---------- Conexión ----------
   function enterApp(code) {
     store.set('cpmp-name', myName());
@@ -677,7 +846,7 @@
     const code = randomCode();
     setStatus('Creando sala…');
     applyTurn();
-    peer = new Peer(ID_PREFIX + code, peerOptions);
+    peer = makePeer(ID_PREFIX + code);
     peer.on('open', (id) => {
       if (myId) { setStatus('Anfitrión · reconectado'); return; } // tras reconectar
       myId = id;
@@ -725,7 +894,7 @@
 
   function joinRoom() {
     const code = $('joinCode').value.trim().toUpperCase();
-    if (!/^[A-Z]{5}$/.test(code)) { alert('El código tiene 5 letras.'); return; }
+    if (!/^[A-Z]{5}$/.test(code)) { alert('El código tiene 5 letras.'); lockLobby(false); return; }
     lockLobby(true);
     setStatus('Conectando al servicio de salas…');
     let tries = 0;
@@ -735,7 +904,7 @@
       if (joined || !peer) return;
       const reachedServer = !!myId;
       setStatus('Revisando tu conexión…');
-      const reason = reachedServer ? await diagnoseNetwork() : 'no-server';
+      const reason = reachedServer && !RELAY ? await diagnoseNetwork() : 'no-server';
       abortJoin();
       alert(JOIN_HELP[reason]);
       openHelp();
@@ -762,7 +931,7 @@
       });
     };
     applyTurn();
-    peer = new Peer(undefined, peerOptions);
+    peer = makePeer(undefined);
     peer.on('open', (id) => {
       if (myId) { if (hostConn && hostConn.open) setStatus('Conectado'); return; } // tras reconectar
       myId = id;
@@ -876,12 +1045,14 @@
     }
   }
 
-  $('create').onclick = () => {
-    if (typeof Peer === 'undefined') { alert('No se pudo cargar PeerJS. Revisa tu conexión a internet.'); return; }
+  $('create').onclick = async () => {
+    lockLobby(true);
+    await relayReady;
     createRoom();
   };
-  $('join').onclick = () => {
-    if (typeof Peer === 'undefined') { alert('No se pudo cargar PeerJS. Revisa tu conexión a internet.'); return; }
+  $('join').onclick = async () => {
+    lockLobby(true);
+    await relayReady;
     joinRoom();
   };
   $('joinCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('join').click(); });

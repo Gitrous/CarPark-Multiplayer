@@ -26,6 +26,18 @@ Deploy from a branch* y elige la rama. Después todos entran a la URL que te da 
 **Opción B – sin publicar nada:** descarga `index.html` y ábrelo con doble clic.
 Cada jugador necesita su copia (o pásale el archivo por chat).
 
+**Opción C – tu propio servidor en GitHub Codespaces:** todo va por HTTPS a través de
+`server.js`, así que funciona aunque la wifi (p. ej. la del instituto) no deje conectar a los
+jugadores entre sí. No permite compartir pantalla.
+
+1. *Code → Codespaces → Create codespace*. El servidor arranca solo (`node server.js`, puerto 8080).
+2. Pestaña *PUERTOS* → clic derecho en 8080 → *Visibilidad del puerto* → *Público*.
+3. Abre la dirección del puerto (`…app.github.dev`); arriba pondrá «Modo servidor». Crea la sala
+   y pasa el enlace de invitación.
+
+El Codespace debe seguir encendido mientras jugáis: se apaga tras 30 min sin actividad
+(ajustable en *GitHub → Settings → Codespaces*) y las horas gratis al mes son limitadas.
+
 ## Si algo falla
 
 - **El juego sale en blanco dentro de la página:** pulsa *Abrir juego en otra pestaña*
