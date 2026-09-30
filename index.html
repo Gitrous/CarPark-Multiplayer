@@ -70,6 +70,22 @@
   #chatLog b { color: var(--accent); }
   #chatLog .sys { color: var(--muted); font-style: italic; }
 
+  #help {
+    max-width: 620px; width: calc(100% - 32px); max-height: calc(100vh - 32px);
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 12px; padding: 0;
+  }
+  #help[open] { display: flex; flex-direction: column; }
+  #help .bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 20px; border-bottom: 1px solid var(--border); }
+  #help::backdrop { background: rgba(0,0,0,.6); }
+  #help .body { padding: 16px 20px; overflow-y: auto; }
+  #help h2 { margin: 0; font-size: 18px; flex: 1; }
+  #help h3 { margin: 18px 0 6px; font-size: 15px; color: var(--accent); }
+  #help p, #help ul, #help ol { margin: 6px 0; }
+  #help li { margin: 4px 0; }
+  #help .warn { background: var(--panel2); border-left: 3px solid var(--accent); padding: 8px 10px; border-radius: 6px; }
+  .linkish { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; }
+
   @media (max-width: 820px) {
     #app { grid-template-columns: 1fr; height: auto; }
     #gameWrap { height: 70vh; }
@@ -83,10 +99,67 @@
   <span id="roomBadge" class="hidden"></span>
   <button id="copyLink" class="hidden">Copiar enlace de invitación</button>
   <span id="status">Sin conectar</span>
+  <button id="helpBtn">❓ Ayuda</button>
 </header>
+
+<dialog id="help">
+  <div class="bar">
+    <h2>Cómo conectarse</h2>
+    <button id="helpClose">Cerrar ✕</button>
+  </div>
+  <div class="body">
+    <p>Uno pulsa <b>Crear sala</b> y pasa el enlace con <b>Copiar enlace de invitación</b>.
+      Los demás abren ese enlace, ponen su nombre y pulsan <b>Unirse</b>.</p>
+
+    <h3>✅ Lo que suele funcionar sin hacer nada</h3>
+    <ul>
+      <li><b>Todos en la wifi de un móvil</b> (zona wifi / hotspot): funciona siempre.</li>
+      <li><b>Cada uno desde su casa</b>: normalmente funciona.</li>
+      <li><b>Todos en la misma wifi de casa</b>: funciona.</li>
+    </ul>
+
+    <h3>⚠️ Si alguien se queda en «Conectando…» o le sale un aviso</h3>
+    <ul>
+      <li><b>«No se encontró la sala»</b>: revisa el código o, mejor, usa el enlace de invitación.
+        El anfitrión no debe cerrar la pestaña de la sala (puede jugar en otra pestaña).</li>
+      <li><b>«Vuestras dos redes no consiguen conectarse entre sí»</b>: pasa mucho en la wifi del
+        instituto, que no deja que los dispositivos hablen entre ellos. Soluciones, de más fácil a menos:
+        <ol>
+          <li>Conectaos todos a la <b>zona wifi de un móvil</b>.</li>
+          <li>Que <b>cree la sala otro jugador</b> y los demás os unís a él.</li>
+          <li>Usad un <b>servidor intermediario (TURN)</b>: mira los pasos de abajo.</li>
+        </ol>
+      </li>
+      <li><b>«Tu red no deja pasar las conexiones de juego»</b>: esa red lo bloquea.
+        Usa los datos del móvil o juega desde otra red.</li>
+      <li><b>«Tu navegador tiene bloqueadas las conexiones entre jugadores»</b>: suele ser una extensión
+        (bloqueador de anuncios, «WebRTC leak»), una VPN o el administrador. Prueba en Chrome o Edge sin extensiones.</li>
+      <li><b>«No se pudo conectar al servicio de salas»</b>: la red bloquea el servicio de salas.
+        Usa los datos del móvil o juega desde otra red.</li>
+    </ul>
+
+    <h3>🔁 Servidor intermediario (TURN), si no estáis en la misma wifi</h3>
+    <p>Hace de puente entre vosotros (como Meet o Teams). Solo lo configura <b>quien crea la sala</b>, una vez:</p>
+    <ol>
+      <li>Crea una cuenta gratuita en <b>metered.ca</b> (apartado <i>TURN Server</i> / <i>Open Relay</i>).</li>
+      <li>En su panel copia las direcciones que empiezan por <code>turn:</code> o <code>turns:</code>,
+        el <b>username</b> y el <b>credential</b>.</li>
+      <li>En esta página, antes de crear la sala, abre <b>Opciones avanzadas</b> y pégalos.</li>
+      <li>Crea la sala y pasa el <b>enlace de invitación</b>: ya lleva esos datos, tus amigos no tienen que tocar nada.</li>
+    </ol>
+    <p class="warn">No publiques ese enlace: lleva tu usuario y contraseña del servidor y cualquiera
+      podría gastar tu cuota gratuita. Pásalo solo a tus amigos.</p>
+
+    <h3>🐢 Si el juego va lento</h3>
+    <p>Compartir pantalla consume bastante. Que comparta solo uno, o nadie.</p>
+
+    <p class="muted">Respetad las normas del instituto sobre el uso de la wifi y los dispositivos.</p>
+  </div>
+</dialog>
 
 <!-- Pantalla inicial -->
 <div id="lobby">
+  <p class="muted" style="margin:0">¿Problemas para conectaros? <button class="linkish" data-help>Mira la ayuda</button></p>
   <div class="card">
     <h2>Tu nombre</h2>
     <input id="name" maxlength="16" placeholder="Ej: Jesús">
@@ -665,6 +738,7 @@
       const reason = reachedServer ? await diagnoseNetwork() : 'no-server';
       abortJoin();
       alert(JOIN_HELP[reason]);
+      openHelp();
     }, 30000);
     const connectToHost = () => {
       tries++;
@@ -714,6 +788,7 @@
         clearTimeout(watchdog);
         abortJoin();
         alert(JOIN_HELP[err.type === 'browser-incompatible' ? 'webrtc-off' : 'no-server']);
+        openHelp();
         return;
       }
       networkError(err);
@@ -729,6 +804,15 @@
     lockLobby(false);
     setStatus('Sin conectar');
   }
+
+  function openHelp() {
+    const d = $('help');
+    if (d.showModal && !d.open) d.showModal();
+  }
+  $('helpBtn').onclick = openHelp;
+  document.querySelectorAll('[data-help]').forEach((b) => { b.onclick = openHelp; });
+  $('helpClose').onclick = () => $('help').close();
+  $('help').addEventListener('click', (e) => { if (e.target === $('help')) $('help').close(); });
 
   const JOIN_HELP = {
     'no-server': 'No se pudo conectar al servicio de salas. Puede que tu red (colegio, trabajo, VPN) lo bloquee. Prueba con los datos del móvil o con otra red.',
